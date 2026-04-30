@@ -52,7 +52,7 @@ Cada servicio registrado puede contener:
 - Costo.
 - Imagen opcional como evidencia.
 
-## Cómo ejecutar el proyecto
+## Cómo ejecutar el proyecto en local
 
 1. Clonar el repositorio:
 
