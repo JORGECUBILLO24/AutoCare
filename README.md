@@ -1,99 +1,58 @@
-# 🚗 AutoCare App
+# AutoCare App
 
-Aplicación móvil desarrollada en Android Studio utilizando **Jetpack Compose**, diseñada para gestionar el mantenimiento de vehículos de forma sencilla, visual y organizada.
+Aplicación móvil desarrollada en Android Studio con Kotlin y Jetpack Compose. Su objetivo es ayudar al usuario a registrar y organizar los servicios de mantenimiento de su vehículo.
 
----
+## Descripción
 
-## 📱 Descripción
+AutoCare permite llevar un control básico del mantenimiento automotriz, registrando servicios realizados, fechas, costos e imágenes relacionadas. La app también cuenta con pantallas de inicio de sesión, registro, perfil y gestión de servicios.
 
-AutoCare es una aplicación que permite a los usuarios llevar un control de los servicios realizados a su vehículo, incluyendo costos, fechas y evidencias (fotos). Además, incluye un sistema básico de autenticación y gestión de perfil.
+## Funcionalidades
 
----
+- Inicio de sesión y registro de usuario.
+- Validación básica de datos.
+- Gestión de perfil del usuario.
+- Registro de servicios del vehículo.
+- Edición y eliminación de servicios.
+- Visualización del historial de mantenimiento.
+- Selección de imágenes desde la galería.
+- Cambio entre modo claro y modo oscuro.
 
-## ⚙️ Funcionalidades principales
+## Pantallas principales
 
-- Registro e inicio de sesión de usuarios  
-- Gestión de perfil (nombre, correo, contraseña, foto)  
-- Registro de servicios del vehículo  
-- Edición y eliminación de servicios  
-- Visualización de historial de mantenimiento  
-- Subida de imágenes (vehículo o recibos)  
-- Selector de fecha para los servicios  
-- Cambio entre modo claro y oscuro  
+- LoginScreen: permite iniciar sesión.
+- RegisterScreen: permite crear una cuenta nueva.
+- HomeScreen: muestra el historial de servicios registrados.
+- ServiceFormScreen: permite agregar o editar un servicio.
+- ProfileScreen: permite editar la información del usuario.
 
----
+## Tecnologías utilizadas
 
-## 🧩 Estructura de pantallas
+- Kotlin
+- Android Studio
+- Jetpack Compose
+- Material Design 3
+- Navigation Compose
+- ViewModel
+- Coil
 
-La aplicación está compuesta por varias vistas principales:
+## Arquitectura
 
-- **Login**
-  - Inicio de sesión con validación básica  
+La aplicación utiliza una estructura basada en MVVM:
 
-- **Registro**
-  - Creación de cuenta con validaciones  
+- Model: representa los datos del usuario y los servicios.
+- View: contiene las pantallas creadas con Jetpack Compose.
+- ViewModel: administra el estado y la lógica de la aplicación.
 
-- **Inicio (Home)**
-  - Vista principal con historial de servicios  
+## Datos que maneja la app
 
-- **Formulario de Servicio**
-  - Crear o editar registros de mantenimiento  
+Cada servicio registrado puede contener:
 
-- **Perfil**
-  - Edición de datos del usuario  
+- Nombre o tipo de servicio.
+- Fecha del servicio.
+- Costo.
+- Imagen opcional como evidencia.
 
----
-
-## 🛠️ Tecnologías utilizadas
-
-- Kotlin  
-- Jetpack Compose  
-- Navigation Compose  
-- Material Design 3  
-- ViewModel (MVVM)  
-- Activity Result API (selección de imágenes)  
-- Coil (carga de imágenes con AsyncImage)  
-
----
-
-## 🧠 Arquitectura
-
-Se utiliza el patrón **MVVM (Model - View - ViewModel)**:
-
-- **View**: Composables (interfaz de usuario)  
-- **ViewModel**: Manejo del estado y lógica  
-- **Model**: Datos del usuario y servicios  
-
----
-
-## 📂 Funcionalidades destacadas
-
-### 🔐 Autenticación
-
-- Validación de correo (debe contener "@")  
-- Manejo de sesión básica  
-- Navegación entre pantallas  
-
-### 📸 Manejo de imágenes
-
-- Selección desde galería  
-- Uso de imágenes para:
-  - Perfil  
-  - Vehículo  
-  - Recibos de servicios  
-
-### 📊 Gestión de servicios
-
-Cada servicio incluye:
-
-- Tipo de servicio  
-- Fecha  
-- Costo  
-- Imagen opcional  
-
----
-
-## ▶️ Cómo ejecutar el proyecto
+## Cómo ejecutar el proyecto
 
 1. Clonar el repositorio:
 
