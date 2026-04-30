@@ -12,13 +12,14 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -38,19 +39,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.navigation.NavType
-import androidx.navigation.compose.*
-import androidx.navigation.navArgument
-import coil.compose.AsyncImage
-import ni.edu.autocare.ui.theme.AutoCareTheme
-import java.text.SimpleDateFormat
-import java.util.*
-import kotlin.math.roundToInt
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import coil.compose.AsyncImage
+import ni.edu.autocare.ui.theme.AutoCareTheme
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
+import java.util.UUID
+import kotlin.math.roundToInt
 
 // =======================================================
 // MODELOS
@@ -119,8 +121,10 @@ class AppStorage(context: Context) {
 
     private fun decodeUsuarios(raw: String): List<Usuario> {
         if (raw.isBlank()) return emptyList()
+
         return raw.split("|||").mapNotNull {
             val p = it.split(";;")
+
             try {
                 Usuario(
                     id = p[0],
@@ -131,7 +135,9 @@ class AppStorage(context: Context) {
                     fotoAutoUri = p[5].ifBlank { null },
                     kilometrajeAuto = p[6].toInt()
                 )
-            } catch (e: Exception) { null }
+            } catch (e: Exception) {
+                null
+            }
         }
     }
 
@@ -152,8 +158,10 @@ class AppStorage(context: Context) {
 
     private fun decodeServicios(raw: String): List<ServicioMantenimiento> {
         if (raw.isBlank()) return emptyList()
+
         return raw.split("|||").mapNotNull {
             val p = it.split(";;")
+
             try {
                 ServicioMantenimiento(
                     id = p[0],
@@ -165,7 +173,9 @@ class AppStorage(context: Context) {
                     kilometraje = p[6].toInt(),
                     fotoReciboUri = p[7].ifBlank { null }
                 )
-            } catch (e: Exception) { null }
+            } catch (e: Exception) {
+                null
+            }
         }
     }
 }
@@ -182,29 +192,43 @@ class AutoCareViewModel : ViewModel() {
     val usuarios = mutableStateListOf<Usuario>()
     val servicios = mutableStateListOf<ServicioMantenimiento>()
 
-    lateinit var storage: AppStorage
+    private lateinit var storage: AppStorage
 
     fun iniciarStorage(context: Context) {
         storage = AppStorage(context)
 
-        if (usuarios.isEmpty()) usuarios.addAll(storage.cargarUsuarios())
-        if (servicios.isEmpty()) servicios.addAll(storage.cargarServicios())
+        if (usuarios.isEmpty()) {
+            usuarios.addAll(storage.cargarUsuarios())
+        }
+
+        if (servicios.isEmpty()) {
+            servicios.addAll(storage.cargarServicios())
+        }
     }
 
     private fun guardarTodo() {
-        storage.guardarUsuarios(usuarios)
-        storage.guardarServicios(servicios)
+        if (::storage.isInitialized) {
+            storage.guardarUsuarios(usuarios)
+            storage.guardarServicios(servicios)
+        }
     }
 
     fun registrar(nombre: String, correo: String, clave: String): String {
-        if (!Patterns.EMAIL_ADDRESS.matcher(correo).matches())
+        if (nombre.isBlank()) {
+            return "El nombre no puede estar vacío"
+        }
+
+        if (!Patterns.EMAIL_ADDRESS.matcher(correo).matches()) {
             return "Correo inválido"
+        }
 
-        if (usuarios.any { it.correo == correo })
+        if (usuarios.any { it.correo == correo }) {
             return "Correo ya registrado"
+        }
 
-        if (clave.length < 6)
+        if (clave.length < 6) {
             return "Contraseña débil"
+        }
 
         usuarios.add(
             Usuario(
@@ -222,6 +246,7 @@ class AutoCareViewModel : ViewModel() {
         val user = usuarios.find {
             it.correo == correo && it.clave == clave
         }
+
         usuarioActual = user
         return user != null
     }
@@ -245,7 +270,10 @@ class AutoCareViewModel : ViewModel() {
         foto: String?
     ) {
         val user = usuarioActual ?: return
+
+        if (tipo.isBlank()) return
         if (costo < 0) return
+        if (km < 0) return
 
         if (id == null) {
             servicios.add(
@@ -262,6 +290,7 @@ class AutoCareViewModel : ViewModel() {
             )
         } else {
             val index = servicios.indexOfFirst { it.id == id }
+
             if (index != -1) {
                 servicios[index] = servicios[index].copy(
                     tipo = tipo,
@@ -274,8 +303,21 @@ class AutoCareViewModel : ViewModel() {
             }
         }
 
-        usuarioActual = usuarioActual?.copy(kilometrajeAuto = km)
+        actualizarKilometrajeUsuario(km)
         guardarTodo()
+    }
+
+    private fun actualizarKilometrajeUsuario(km: Int) {
+        val user = usuarioActual ?: return
+
+        val actualizado = user.copy(kilometrajeAuto = km)
+        val index = usuarios.indexOfFirst { it.id == user.id }
+
+        if (index != -1) {
+            usuarios[index] = actualizado
+        }
+
+        usuarioActual = actualizado
     }
 
     fun eliminarServicio(id: String) {
@@ -284,29 +326,86 @@ class AutoCareViewModel : ViewModel() {
     }
 
     fun actualizarPerfil(nombre: String, correo: String, clave: String, km: Int): String {
-        val u = usuarioActual ?: return "Error"
+        val user = usuarioActual ?: return "Error"
 
-        if (!Patterns.EMAIL_ADDRESS.matcher(correo).matches())
+        if (nombre.isBlank()) {
+            return "El nombre no puede estar vacío"
+        }
+
+        if (!Patterns.EMAIL_ADDRESS.matcher(correo).matches()) {
             return "Correo inválido"
+        }
 
-        if (usuarios.any { it.correo == correo && it.id != u.id })
+        if (usuarios.any { it.correo == correo && it.id != user.id }) {
             return "Correo ya usado"
+        }
 
-        u.nombre = nombre
-        u.correo = correo
-        u.clave = clave
-        u.kilometrajeAuto = km
+        if (clave.length < 6) {
+            return "Contraseña débil"
+        }
 
-        usuarioActual = u.copy()
+        if (km < 0) {
+            return "Kilometraje inválido"
+        }
+
+        val actualizado = user.copy(
+            nombre = nombre,
+            correo = correo,
+            clave = clave,
+            kilometrajeAuto = km
+        )
+
+        val index = usuarios.indexOfFirst { it.id == user.id }
+
+        if (index != -1) {
+            usuarios[index] = actualizado
+        }
+
+        usuarioActual = actualizado
         guardarTodo()
+
         return "OK"
     }
 
-    fun totalGastado(): Double = serviciosUsuario.sumOf { it.costo }
+    fun actualizarFotoPerfil(uri: String) {
+        val user = usuarioActual ?: return
 
-    fun promedio(): Double =
-        if (serviciosUsuario.isEmpty()) 0.0
-        else totalGastado() / serviciosUsuario.size
+        val actualizado = user.copy(fotoPerfilUri = uri)
+        val index = usuarios.indexOfFirst { it.id == user.id }
+
+        if (index != -1) {
+            usuarios[index] = actualizado
+        }
+
+        usuarioActual = actualizado
+        guardarTodo()
+    }
+
+    fun actualizarFotoAuto(uri: String) {
+        val user = usuarioActual ?: return
+
+        val actualizado = user.copy(fotoAutoUri = uri)
+        val index = usuarios.indexOfFirst { it.id == user.id }
+
+        if (index != -1) {
+            usuarios[index] = actualizado
+        }
+
+        usuarioActual = actualizado
+        guardarTodo()
+    }
+
+    fun totalGastado(): Double {
+        return serviciosUsuario.sumOf { it.costo }
+    }
+
+    fun promedio(): Double {
+        return if (serviciosUsuario.isEmpty()) {
+            0.0
+        } else {
+            totalGastado() / serviciosUsuario.size
+        }
+    }
 
     fun totalMesActual(): Double {
         val cal = Calendar.getInstance()
@@ -316,6 +415,7 @@ class AutoCareViewModel : ViewModel() {
         return serviciosUsuario.filter {
             val c = Calendar.getInstance()
             c.timeInMillis = it.fecha
+
             c.get(Calendar.MONTH) == mes &&
                     c.get(Calendar.YEAR) == year
         }.sumOf { it.costo }
@@ -323,7 +423,7 @@ class AutoCareViewModel : ViewModel() {
 }
 
 // =======================================================
-// MAIN
+// MAIN ACTIVITY
 // =======================================================
 
 class MainActivity : ComponentActivity() {
@@ -342,8 +442,10 @@ class MainActivity : ComponentActivity() {
             AutoCareTheme(darkTheme = vm.darkMode) {
                 val nav = rememberNavController()
 
-                NavHost(navController = nav, startDestination = "login") {
-
+                NavHost(
+                    navController = nav,
+                    startDestination = "login"
+                ) {
                     composable("login") {
                         PantallaLogin(nav, vm)
                     }
@@ -361,28 +463,35 @@ class MainActivity : ComponentActivity() {
                     }
 
                     composable(
-                        "form?id={id}",
+                        route = "form?id={id}",
                         arguments = listOf(
                             navArgument("id") {
                                 nullable = true
                                 type = NavType.StringType
+                                defaultValue = null
                             }
                         )
                     ) {
-                        PantallaFormulario(nav, vm,
-                            it.arguments?.getString("id"))
+                        PantallaFormulario(
+                            nav = nav,
+                            vm = vm,
+                            id = it.arguments?.getString("id")
+                        )
                     }
 
                     composable(
-                        "detalle/{id}",
+                        route = "detalle/{id}",
                         arguments = listOf(
                             navArgument("id") {
                                 type = NavType.StringType
                             }
                         )
                     ) {
-                        PantallaDetalle(nav, vm,
-                            it.arguments?.getString("id") ?: "")
+                        PantallaDetalle(
+                            nav = nav,
+                            vm = vm,
+                            id = it.arguments?.getString("id") ?: ""
+                        )
                     }
                 }
             }
@@ -396,25 +505,59 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun PantallaLogin(nav: NavHostController, vm: AutoCareViewModel) {
-
     var correo by remember { mutableStateOf("") }
     var clave by remember { mutableStateOf("") }
     var visible by remember { mutableStateOf(false) }
+
     val ctx = LocalContext.current
 
     Column(
-        Modifier.fillMaxSize().padding(30.dp),
-        verticalArrangement = Arrangement.Center
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(32.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text("AutoCare", fontSize = 34.sp, fontWeight = FontWeight.Black)
+        Surface(
+            modifier = Modifier.size(88.dp),
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.primaryContainer
+        ) {
+            Icon(
+                Icons.Default.AutoMode,
+                contentDescription = null,
+                modifier = Modifier.padding(18.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+        }
 
-        Spacer(Modifier.height(30.dp))
+        Spacer(Modifier.height(14.dp))
+
+        Text(
+            text = "AutoCare",
+            fontSize = 34.sp,
+            fontWeight = FontWeight.Black
+        )
+
+        Text(
+            text = "Controla el mantenimiento de tu vehículo",
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.outline
+        )
+
+        Spacer(Modifier.height(36.dp))
 
         OutlinedTextField(
             value = correo,
             onValueChange = { correo = it },
             label = { Text("Correo") },
-            modifier = Modifier.fillMaxWidth()
+            leadingIcon = {
+                Icon(Icons.Default.Email, contentDescription = null)
+            },
+            isError = correo.isNotEmpty() &&
+                    (!correo.contains("@") || !correo.contains(".")),
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp)
         )
 
         Spacer(Modifier.height(12.dp))
@@ -423,24 +566,36 @@ fun PantallaLogin(nav: NavHostController, vm: AutoCareViewModel) {
             value = clave,
             onValueChange = { clave = it },
             label = { Text("Contraseña") },
-            modifier = Modifier.fillMaxWidth(),
+            leadingIcon = {
+                Icon(Icons.Default.Lock, contentDescription = null)
+            },
             visualTransformation =
                 if (visible) VisualTransformation.None
                 else PasswordVisualTransformation(),
             trailingIcon = {
-                IconButton(onClick = { visible = !visible }) {
-                    Icon(Icons.Default.Visibility, null)
+                IconButton(
+                    onClick = { visible = !visible }
+                ) {
+                    Icon(
+                        if (visible) Icons.Default.VisibilityOff
+                        else Icons.Default.Visibility,
+                        contentDescription = null
+                    )
                 }
-            }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp)
         )
 
-        Spacer(Modifier.height(25.dp))
+        Spacer(Modifier.height(28.dp))
 
         Button(
             onClick = {
                 if (vm.login(correo, clave)) {
                     nav.navigate("inicio") {
-                        popUpTo("login") { inclusive = true }
+                        popUpTo("login") {
+                            inclusive = true
+                        }
                     }
                 } else {
                     Toast.makeText(
@@ -450,15 +605,21 @@ fun PantallaLogin(nav: NavHostController, vm: AutoCareViewModel) {
                     ).show()
                 }
             },
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            shape = RoundedCornerShape(18.dp)
         ) {
-            Text("Entrar")
+            Text(
+                text = "ENTRAR",
+                fontWeight = FontWeight.Bold
+            )
         }
 
         TextButton(
             onClick = { nav.navigate("registro") }
         ) {
-            Text("Crear cuenta")
+            Text("Crear cuenta nueva")
         }
     }
 }
@@ -469,41 +630,128 @@ fun PantallaLogin(nav: NavHostController, vm: AutoCareViewModel) {
 
 @Composable
 fun PantallaRegistro(nav: NavHostController, vm: AutoCareViewModel) {
-
     var nombre by remember { mutableStateOf("") }
     var correo by remember { mutableStateOf("") }
     var clave by remember { mutableStateOf("") }
+    var claveVisible by remember { mutableStateOf(false) }
 
     val ctx = LocalContext.current
 
     Column(
-        Modifier.fillMaxSize().padding(25.dp)
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(28.dp)
     ) {
-        Text("Registro", fontSize = 30.sp)
+        IconButton(
+            onClick = { nav.popBackStack() }
+        ) {
+            Icon(
+                Icons.Default.ArrowBackIosNew,
+                contentDescription = null
+            )
+        }
 
-        Spacer(Modifier.height(20.dp))
+        Text(
+            text = "Crear cuenta",
+            fontSize = 32.sp,
+            fontWeight = FontWeight.Black
+        )
 
-        OutlinedTextField(nombre, { nombre = it }, label = { Text("Nombre") })
-        Spacer(Modifier.height(10.dp))
-        OutlinedTextField(correo, { correo = it }, label = { Text("Correo") })
-        Spacer(Modifier.height(10.dp))
-        OutlinedTextField(clave, { clave = it }, label = { Text("Clave") })
+        Text(
+            text = "Registra tus datos para comenzar a controlar el mantenimiento de tu auto.",
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.outline
+        )
 
-        Spacer(Modifier.height(25.dp))
+        Spacer(Modifier.height(24.dp))
+
+        OutlinedTextField(
+            value = nombre,
+            onValueChange = { nombre = it },
+            label = { Text("Nombre completo") },
+            leadingIcon = {
+                Icon(Icons.Default.Person, contentDescription = null)
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp)
+        )
+
+        Spacer(Modifier.height(12.dp))
+
+        OutlinedTextField(
+            value = correo,
+            onValueChange = { correo = it },
+            label = { Text("Correo") },
+            leadingIcon = {
+                Icon(Icons.Default.Email, contentDescription = null)
+            },
+            isError = correo.isNotEmpty() &&
+                    (!correo.contains("@") || !correo.contains(".")),
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp)
+        )
+
+        Spacer(Modifier.height(12.dp))
+
+        OutlinedTextField(
+            value = clave,
+            onValueChange = { clave = it },
+            label = { Text("Contraseña") },
+            leadingIcon = {
+                Icon(Icons.Default.Lock, contentDescription = null)
+            },
+            visualTransformation =
+                if (claveVisible) VisualTransformation.None
+                else PasswordVisualTransformation(),
+            trailingIcon = {
+                IconButton(
+                    onClick = { claveVisible = !claveVisible }
+                ) {
+                    Icon(
+                        if (claveVisible) Icons.Default.VisibilityOff
+                        else Icons.Default.Visibility,
+                        contentDescription = null
+                    )
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp)
+        )
+
+        Spacer(Modifier.height(28.dp))
 
         Button(
             onClick = {
                 val r = vm.registrar(nombre, correo, clave)
 
                 if (r == "OK") {
-                    Toast.makeText(ctx, "Registrado", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        ctx,
+                        "Cuenta creada correctamente",
+                        Toast.LENGTH_SHORT
+                    ).show()
+
                     nav.popBackStack()
                 } else {
-                    Toast.makeText(ctx, r, Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        ctx,
+                        r,
+                        Toast.LENGTH_SHORT
+                    ).show()
                 }
-            }
+            },
+            enabled = nombre.isNotBlank() &&
+                    correo.isNotBlank() &&
+                    clave.length >= 6,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            shape = RoundedCornerShape(18.dp)
         ) {
-            Text("Registrar")
+            Text(
+                text = "REGISTRARME",
+                fontWeight = FontWeight.Bold
+            )
         }
     }
 }
@@ -512,145 +760,426 @@ fun PantallaRegistro(nav: NavHostController, vm: AutoCareViewModel) {
 // INICIO
 // =======================================================
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PantallaInicio(nav: NavHostController, vm: AutoCareViewModel) {
-
     val user = vm.usuarioActual ?: return
+
     var buscar by remember { mutableStateOf("") }
     var confirmarEliminar by remember { mutableStateOf<String?>(null) }
 
+    val launcherFotoAuto = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        uri?.let {
+            vm.actualizarFotoAuto(it.toString())
+        }
+    }
+
     val lista = vm.serviciosUsuario.filter {
-        it.tipo.contains(buscar, true)
+        it.tipo.contains(buscar, ignoreCase = true)
     }
 
     if (confirmarEliminar != null) {
         AlertDialog(
             onDismissRequest = { confirmarEliminar = null },
-            title = { Text("Eliminar") },
-            text = { Text("¿Seguro de eliminar este servicio?") },
+            title = { Text("Eliminar servicio") },
+            text = { Text("¿Seguro que deseas eliminar este registro de mantenimiento?") },
             confirmButton = {
-                TextButton(onClick = {
-                    vm.eliminarServicio(confirmarEliminar!!)
-                    confirmarEliminar = null
-                }) { Text("Sí") }
+                TextButton(
+                    onClick = {
+                        vm.eliminarServicio(confirmarEliminar!!)
+                        confirmarEliminar = null
+                    }
+                ) {
+                    Text("Sí, eliminar")
+                }
             },
             dismissButton = {
-                TextButton(onClick = {
-                    confirmarEliminar = null
-                }) { Text("No") }
+                TextButton(
+                    onClick = { confirmarEliminar = null }
+                ) {
+                    Text("Cancelar")
+                }
             }
         )
     }
 
     Scaffold(
+        topBar = {
+            CenterAlignedTopAppBar(
+                title = {
+                    Text(
+                        text = "MI GARAJE",
+                        fontWeight = FontWeight.Black
+                    )
+                },
+                actions = {
+                    IconButton(
+                        onClick = { vm.darkMode = !vm.darkMode }
+                    ) {
+                        Icon(
+                            if (vm.darkMode) Icons.Default.LightMode
+                            else Icons.Default.DarkMode,
+                            contentDescription = "Cambiar tema"
+                        )
+                    }
+                }
+            )
+        },
+        bottomBar = {
+            NavigationBar {
+                NavigationBarItem(
+                    selected = true,
+                    onClick = { },
+                    icon = {
+                        Icon(
+                            Icons.Default.Home,
+                            contentDescription = null
+                        )
+                    },
+                    label = { Text("Inicio") }
+                )
+
+                NavigationBarItem(
+                    selected = false,
+                    onClick = { nav.navigate("perfil") },
+                    icon = {
+                        Icon(
+                            Icons.Default.Person,
+                            contentDescription = null
+                        )
+                    },
+                    label = { Text("Perfil") }
+                )
+            }
+        },
         floatingActionButton = {
             FloatingActionButton(
-                onClick = { nav.navigate("form") }
+                onClick = { nav.navigate("form") },
+                containerColor = MaterialTheme.colorScheme.primary
             ) {
-                Icon(Icons.Default.Add, null)
+                Icon(
+                    Icons.Default.Add,
+                    contentDescription = "Agregar servicio",
+                    tint = Color.White
+                )
             }
         }
     ) { pad ->
 
         Column(
-            Modifier.padding(pad).padding(16.dp)
+            modifier = Modifier
+                .padding(pad)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp)
         ) {
 
-            Text(
-                "Hola ${user.nombre}",
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold
-            )
-
-            Text("Kilometraje: ${user.kilometrajeAuto} km")
-
-            Spacer(Modifier.height(10.dp))
-
             Card(
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(210.dp)
+                    .clickable {
+                        launcherFotoAuto.launch(
+                            PickVisualMediaRequest(
+                                ActivityResultContracts.PickVisualMedia.ImageOnly
+                            )
+                        )
+                    },
+                shape = RoundedCornerShape(28.dp),
+                elevation = CardDefaults.cardElevation(8.dp)
             ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("Resumen")
-                    Text("Total: $${vm.totalGastado()}")
-                    Text("Mes: $${vm.totalMesActual()}")
-                    Text("Promedio: $${vm.promedio().roundToInt()}")
+                Box {
+                    if (user.fotoAutoUri != null) {
+                        AsyncImage(
+                            model = user.fotoAutoUri,
+                            contentDescription = "Foto del auto",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(MaterialTheme.colorScheme.primaryContainer),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    Icons.Default.DirectionsCar,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(52.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+
+                                Spacer(Modifier.height(8.dp))
+
+                                Text(
+                                    text = "Toca para subir foto de tu auto",
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(
+                                        Color.Transparent,
+                                        Color.Black.copy(alpha = 0.75f)
+                                    )
+                                )
+                            )
+                            .padding(18.dp),
+                        verticalArrangement = Arrangement.Bottom
+                    ) {
+                        Text(
+                            text = "Bienvenido de nuevo",
+                            color = Color.White.copy(alpha = 0.85f),
+                            fontSize = 13.sp
+                        )
+
+                        Text(
+                            text = user.nombre,
+                            color = Color.White,
+                            fontSize = 26.sp,
+                            fontWeight = FontWeight.Black
+                        )
+
+                        Text(
+                            text = "Kilometraje actual: ${user.kilometrajeAuto} km",
+                            color = Color.White.copy(alpha = 0.9f),
+                            fontSize = 13.sp
+                        )
+                    }
                 }
             }
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(18.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Card(
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp)
+                    ) {
+                        Text("Total", fontSize = 12.sp)
+
+                        Text(
+                            text = "$${vm.totalGastado()}",
+                            fontWeight = FontWeight.Black,
+                            fontSize = 20.sp
+                        )
+                    }
+                }
+
+                Card(
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp)
+                    ) {
+                        Text("Este mes", fontSize = 12.sp)
+
+                        Text(
+                            text = "$${vm.totalMesActual()}",
+                            fontWeight = FontWeight.Black,
+                            fontSize = 20.sp
+                        )
+                    }
+                }
+
+                Card(
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp)
+                    ) {
+                        Text("Promedio", fontSize = 12.sp)
+
+                        Text(
+                            text = "$${vm.promedio().roundToInt()}",
+                            fontWeight = FontWeight.Black,
+                            fontSize = 20.sp
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            Text(
+                text = "Historial de servicios",
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = 21.sp
+            )
+
+            Spacer(Modifier.height(10.dp))
 
             OutlinedTextField(
                 value = buscar,
                 onValueChange = { buscar = it },
                 label = { Text("Buscar servicio") },
-                modifier = Modifier.fillMaxWidth()
+                leadingIcon = {
+                    Icon(
+                        Icons.Default.Search,
+                        contentDescription = null
+                    )
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp)
             )
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(14.dp))
 
-            Row {
-                Button(onClick = {
-                    nav.navigate("perfil")
-                }) {
-                    Text("Perfil")
-                }
-
-                Spacer(Modifier.width(10.dp))
-
-                Button(onClick = {
-                    vm.darkMode = !vm.darkMode
-                }) {
-                    Text("Tema")
-                }
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            LazyColumn {
-                items(lista) { item ->
-
-                    Card(
+            if (lista.isEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(22.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 6.dp)
-                            .clickable {
-                                nav.navigate("detalle/${item.id}")
-                            }
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Row(
-                            Modifier.padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        Icon(
+                            Icons.Default.ReceiptLong,
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+
+                        Spacer(Modifier.height(8.dp))
+
+                        Text(
+                            text = "Todavía no hay servicios registrados",
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        Text(
+                            text = "Toca el botón + para agregar el primer mantenimiento.",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                }
+            } else {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    lista.forEach { item ->
+
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    nav.navigate("detalle/${item.id}")
+                                },
+                            shape = RoundedCornerShape(18.dp),
+                            elevation = CardDefaults.cardElevation(3.dp)
                         ) {
-
-                            Column(Modifier.weight(1f)) {
-                                Text(item.tipo, fontWeight = FontWeight.Bold)
-                                Text(
-                                    SimpleDateFormat(
-                                        "dd/MM/yyyy",
-                                        Locale.getDefault()
-                                    ).format(Date(item.fecha))
-                                )
-                                Text("$${item.costo}")
-                            }
-
-                            IconButton(
-                                onClick = {
-                                    nav.navigate("form?id=${item.id}")
-                                }
+                            Row(
+                                modifier = Modifier.padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Default.Edit, null)
-                            }
-
-                            IconButton(
-                                onClick = {
-                                    confirmarEliminar = item.id
+                                Surface(
+                                    modifier = Modifier.size(52.dp),
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = MaterialTheme.colorScheme.secondaryContainer
+                                ) {
+                                    if (item.fotoReciboUri != null) {
+                                        AsyncImage(
+                                            model = item.fotoReciboUri,
+                                            contentDescription = null,
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                    } else {
+                                        Icon(
+                                            Icons.Default.Build,
+                                            contentDescription = null,
+                                            modifier = Modifier.padding(13.dp),
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
                                 }
-                            ) {
-                                Icon(
-                                    Icons.Default.Delete,
-                                    null,
-                                    tint = Color.Red
-                                )
+
+                                Spacer(Modifier.width(14.dp))
+
+                                Column(
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(
+                                        text = item.tipo,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 16.sp
+                                    )
+
+                                    Text(
+                                        text = SimpleDateFormat(
+                                            "dd/MM/yyyy",
+                                            Locale.getDefault()
+                                        ).format(Date(item.fecha)),
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.outline
+                                    )
+
+                                    Text(
+                                        text = "$${item.costo} • ${item.kilometraje} km",
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = {
+                                        nav.navigate("form?id=${item.id}")
+                                    }
+                                ) {
+                                    Icon(
+                                        Icons.Default.Edit,
+                                        contentDescription = "Editar",
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = {
+                                        confirmarEliminar = item.id
+                                    }
+                                ) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = "Eliminar",
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
                             }
                         }
                     }
@@ -663,6 +1192,7 @@ fun PantallaInicio(nav: NavHostController, vm: AutoCareViewModel) {
 // =======================================================
 // FORMULARIO
 // =======================================================
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PantallaFormulario(
@@ -670,8 +1200,8 @@ fun PantallaFormulario(
     vm: AutoCareViewModel,
     id: String?
 ) {
-
     val editar = vm.serviciosUsuario.find { it.id == id }
+    val esEdicion = editar != null
 
     var tipo by remember {
         mutableStateOf(editar?.tipo ?: "Cambio de aceite")
@@ -698,10 +1228,19 @@ fun PantallaFormulario(
         )
     }
 
+    var expanded by remember { mutableStateOf(false) }
+    var showPicker by remember { mutableStateOf(false) }
+
+    val datePickerState = rememberDatePickerState(
+        initialSelectedDateMillis = editar?.fecha ?: System.currentTimeMillis()
+    )
+
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
-    ) {
-        if (it != null) foto = it
+    ) { uri ->
+        if (uri != null) {
+            foto = uri
+        }
     }
 
     val categorias = listOf(
@@ -713,129 +1252,292 @@ fun PantallaFormulario(
         "Revisión general"
     )
 
-    var expanded by remember { mutableStateOf(false) }
-
-    Column(
-        Modifier.fillMaxSize()
-            .padding(20.dp)
-            .verticalScroll(rememberScrollState())
-    ) {
-
-        Text(
-            if (editar == null) "Nuevo Servicio"
-            else "Editar Servicio",
-            fontSize = 28.sp
-        )
-
-        Spacer(Modifier.height(16.dp))
-
-        ExposedDropdownMenuBox(
-            expanded = expanded,
-            onExpandedChange = { expanded = !expanded }
-        ) {
-
-            OutlinedTextField(
-                value = tipo,
-                onValueChange = {},
-                readOnly = true,
-                label = { Text("Categoría") },
-                modifier = Modifier.menuAnchor()
-            )
-
-            ExposedDropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { expanded = false }
-            ) {
-                categorias.forEach {
-                    DropdownMenuItem(
-                        text = { Text(it) },
-                        onClick = {
-                            tipo = it
-                            expanded = false
-                        }
-                    )
+    if (showPicker) {
+        DatePickerDialog(
+            onDismissRequest = { showPicker = false },
+            confirmButton = {
+                TextButton(
+                    onClick = { showPicker = false }
+                ) {
+                    Text("Aceptar")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showPicker = false }
+                ) {
+                    Text("Cancelar")
                 }
             }
-        }
-
-        Spacer(Modifier.height(12.dp))
-
-        OutlinedTextField(
-            costo,
-            { costo = it },
-            label = { Text("Costo") },
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Number
-            )
-        )
-
-        Spacer(Modifier.height(12.dp))
-
-        OutlinedTextField(
-            km,
-            { km = it },
-            label = { Text("Kilometraje") }
-        )
-
-        Spacer(Modifier.height(12.dp))
-
-        OutlinedTextField(
-            obs,
-            { obs = it },
-            label = { Text("Observaciones") },
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(Modifier.height(12.dp))
-
-        Button(
-            onClick = {
-                launcher.launch(
-                    PickVisualMediaRequest(
-                        ActivityResultContracts
-                            .PickVisualMedia.ImageOnly
-                    )
-                )
-            }
         ) {
-            Text("Seleccionar Foto")
+            DatePicker(state = datePickerState)
         }
+    }
 
-        foto?.let {
-            Spacer(Modifier.height(10.dp))
-            AsyncImage(
-                model = it,
-                contentDescription = null,
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        text = if (esEdicion) "Editar servicio" else "Nuevo servicio",
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                navigationIcon = {
+                    IconButton(
+                        onClick = { nav.popBackStack() }
+                    ) {
+                        Icon(
+                            Icons.Default.ArrowBack,
+                            contentDescription = null
+                        )
+                    }
+                }
+            )
+        }
+    ) { pad ->
+
+        Column(
+            modifier = Modifier
+                .padding(pad)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(20.dp)
+        ) {
+
+            Text(
+                text = "Datos del mantenimiento",
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = 22.sp
+            )
+
+            Text(
+                text = "Registra la información principal del servicio realizado.",
+                color = MaterialTheme.colorScheme.outline,
+                fontSize = 13.sp
+            )
+
+            Spacer(Modifier.height(18.dp))
+
+            ExposedDropdownMenuBox(
+                expanded = expanded,
+                onExpandedChange = { expanded = !expanded }
+            ) {
+                OutlinedTextField(
+                    value = tipo,
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Categoría") },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.Build,
+                            contentDescription = null
+                        )
+                    },
+                    trailingIcon = {
+                        ExposedDropdownMenuDefaults.TrailingIcon(
+                            expanded = expanded
+                        )
+                    },
+                    modifier = Modifier
+                        .menuAnchor()
+                        .fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp)
+                )
+
+                ExposedDropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false }
+                ) {
+                    categorias.forEach { categoria ->
+                        DropdownMenuItem(
+                            text = { Text(categoria) },
+                            onClick = {
+                                tipo = categoria
+                                expanded = false
+                            }
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = datePickerState.selectedDateMillis?.let {
+                    SimpleDateFormat(
+                        "dd/MM/yyyy",
+                        Locale.getDefault()
+                    ).format(Date(it))
+                } ?: "Fecha del servicio",
+                onValueChange = {},
+                readOnly = true,
+                enabled = false,
+                label = { Text("Fecha") },
+                leadingIcon = {
+                    Icon(
+                        Icons.Default.CalendarMonth,
+                        contentDescription = null
+                    )
+                },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(180.dp)
-            )
-        }
-
-        Spacer(Modifier.height(20.dp))
-
-        Button(
-            onClick = {
-                val costoNum = costo.toDoubleOrNull() ?: -1.0
-                val kmNum = km.toIntOrNull() ?: 0
-
-                if (costoNum < 0) return@Button
-
-                vm.guardarServicio(
-                    id,
-                    tipo,
-                    System.currentTimeMillis(),
-                    costoNum,
-                    obs,
-                    kmNum,
-                    foto?.toString()
+                    .clickable { showPicker = true },
+                shape = RoundedCornerShape(16.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                    disabledBorderColor = MaterialTheme.colorScheme.outline,
+                    disabledLeadingIconColor = MaterialTheme.colorScheme.primary,
+                    disabledLabelColor = MaterialTheme.colorScheme.outline
                 )
+            )
 
-                nav.popBackStack()
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Guardar")
+            Spacer(Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = costo,
+                onValueChange = { costo = it },
+                label = { Text("Costo total") },
+                leadingIcon = {
+                    Icon(
+                        Icons.Default.AttachMoney,
+                        contentDescription = null
+                    )
+                },
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Number
+                ),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp)
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = km,
+                onValueChange = { km = it },
+                label = { Text("Kilometraje") },
+                leadingIcon = {
+                    Icon(
+                        Icons.Default.Speed,
+                        contentDescription = null
+                    )
+                },
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Number
+                ),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp)
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = obs,
+                onValueChange = { obs = it },
+                label = { Text("Observaciones") },
+                leadingIcon = {
+                    Icon(
+                        Icons.Default.Notes,
+                        contentDescription = null
+                    )
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(120.dp),
+                shape = RoundedCornerShape(16.dp)
+            )
+
+            Spacer(Modifier.height(22.dp))
+
+            Text(
+                text = "Evidencia",
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(190.dp)
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .clickable {
+                        launcher.launch(
+                            PickVisualMediaRequest(
+                                ActivityResultContracts.PickVisualMedia.ImageOnly
+                            )
+                        )
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                if (foto != null) {
+                    AsyncImage(
+                        model = foto,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            Icons.Default.AddAPhoto,
+                            contentDescription = null,
+                            modifier = Modifier.size(42.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+
+                        Spacer(Modifier.height(6.dp))
+
+                        Text("Toca para añadir foto")
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(28.dp))
+
+            Button(
+                onClick = {
+                    val costoNum = costo.toDoubleOrNull()
+                    val kmNum = km.toIntOrNull()
+                    val fechaSeleccionada =
+                        datePickerState.selectedDateMillis ?: System.currentTimeMillis()
+
+                    if (costoNum == null || costoNum < 0) {
+                        return@Button
+                    }
+
+                    if (kmNum == null || kmNum < 0) {
+                        return@Button
+                    }
+
+                    vm.guardarServicio(
+                        id = id,
+                        tipo = tipo,
+                        fecha = fechaSeleccionada,
+                        costo = costoNum,
+                        obs = obs,
+                        km = kmNum,
+                        foto = foto?.toString()
+                    )
+
+                    nav.popBackStack()
+                },
+                enabled = costo.isNotBlank() && km.isNotBlank(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(58.dp),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Text(
+                    text = if (esEdicion) "ACTUALIZAR SERVICIO"
+                    else "GUARDAR SERVICIO",
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
     }
 }
@@ -844,60 +1546,177 @@ fun PantallaFormulario(
 // DETALLE
 // =======================================================
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PantallaDetalle(
     nav: NavHostController,
     vm: AutoCareViewModel,
     id: String
 ) {
-
     val item = vm.serviciosUsuario.find { it.id == id } ?: return
 
-    Column(
-        Modifier.fillMaxSize()
-            .padding(20.dp)
-            .verticalScroll(rememberScrollState())
-    ) {
-
-        Text(item.tipo, fontSize = 30.sp)
-
-        Spacer(Modifier.height(15.dp))
-
-        Text("Fecha:")
-        Text(
-            SimpleDateFormat(
-                "dd/MM/yyyy",
-                Locale.getDefault()
-            ).format(Date(item.fecha))
-        )
-
-        Spacer(Modifier.height(10.dp))
-
-        Text("Costo: $${item.costo}")
-        Text("Kilometraje: ${item.kilometraje} km")
-
-        Spacer(Modifier.height(10.dp))
-
-        Text("Observaciones:")
-        Text(item.observaciones)
-
-        item.fotoReciboUri?.let {
-            Spacer(Modifier.height(16.dp))
-            AsyncImage(
-                model = it,
-                contentDescription = null,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(220.dp)
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        text = "Detalle del servicio",
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                navigationIcon = {
+                    IconButton(
+                        onClick = { nav.popBackStack() }
+                    ) {
+                        Icon(
+                            Icons.Default.ArrowBack,
+                            contentDescription = null
+                        )
+                    }
+                }
             )
         }
+    ) { pad ->
 
-        Spacer(Modifier.height(20.dp))
-
-        Button(
-            onClick = { nav.popBackStack() }
+        Column(
+            modifier = Modifier
+                .padding(pad)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(20.dp)
         ) {
-            Text("Volver")
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(24.dp),
+                elevation = CardDefaults.cardElevation(5.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp)
+                ) {
+                    Surface(
+                        modifier = Modifier.size(58.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Icon(
+                            Icons.Default.Build,
+                            contentDescription = null,
+                            modifier = Modifier.padding(14.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+
+                    Text(
+                        text = item.tipo,
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.Black
+                    )
+
+                    Spacer(Modifier.height(12.dp))
+
+                    Text(
+                        text = "Fecha",
+                        color = MaterialTheme.colorScheme.outline,
+                        fontSize = 13.sp
+                    )
+
+                    Text(
+                        text = SimpleDateFormat(
+                            "dd/MM/yyyy",
+                            Locale.getDefault()
+                        ).format(Date(item.fecha)),
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Spacer(Modifier.height(12.dp))
+
+                    Text(
+                        text = "Costo",
+                        color = MaterialTheme.colorScheme.outline,
+                        fontSize = 13.sp
+                    )
+
+                    Text(
+                        text = "$${item.costo}",
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Black,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+
+                    Spacer(Modifier.height(12.dp))
+
+                    Text(
+                        text = "Kilometraje",
+                        color = MaterialTheme.colorScheme.outline,
+                        fontSize = 13.sp
+                    )
+
+                    Text(
+                        text = "${item.kilometraje} km",
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Spacer(Modifier.height(12.dp))
+
+                    Text(
+                        text = "Observaciones",
+                        color = MaterialTheme.colorScheme.outline,
+                        fontSize = 13.sp
+                    )
+
+                    Text(
+                        text = item.observaciones.ifBlank {
+                            "Sin observaciones registradas."
+                        }
+                    )
+                }
+            }
+
+            item.fotoReciboUri?.let {
+                Spacer(Modifier.height(18.dp))
+
+                Text(
+                    text = "Evidencia",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+
+                Spacer(Modifier.height(8.dp))
+
+                AsyncImage(
+                    model = it,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(240.dp)
+                        .clip(RoundedCornerShape(22.dp)),
+                    contentScale = ContentScale.Crop
+                )
+            }
+
+            Spacer(Modifier.height(22.dp))
+
+            Button(
+                onClick = {
+                    nav.navigate("form?id=${item.id}")
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(54.dp),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Icon(
+                    Icons.Default.Edit,
+                    contentDescription = null
+                )
+
+                Spacer(Modifier.width(8.dp))
+
+                Text("Editar servicio")
+            }
         }
     }
 }
@@ -906,12 +1725,12 @@ fun PantallaDetalle(
 // PERFIL
 // =======================================================
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PantallaPerfil(
     nav: NavHostController,
     vm: AutoCareViewModel
 ) {
-
     val u = vm.usuarioActual ?: return
     val ctx = LocalContext.current
 
@@ -919,51 +1738,264 @@ fun PantallaPerfil(
     var correo by remember { mutableStateOf(u.correo) }
     var clave by remember { mutableStateOf(u.clave) }
     var km by remember { mutableStateOf(u.kilometrajeAuto.toString()) }
+    var claveVisible by remember { mutableStateOf(false) }
 
-    Column(
-        Modifier.fillMaxSize().padding(20.dp)
-    ) {
-
-        Text("Perfil", fontSize = 30.sp)
-
-        Spacer(Modifier.height(20.dp))
-
-        OutlinedTextField(nombre, { nombre = it }, label = { Text("Nombre") })
-        Spacer(Modifier.height(10.dp))
-        OutlinedTextField(correo, { correo = it }, label = { Text("Correo") })
-        Spacer(Modifier.height(10.dp))
-        OutlinedTextField(clave, { clave = it }, label = { Text("Clave") })
-        Spacer(Modifier.height(10.dp))
-        OutlinedTextField(km, { km = it }, label = { Text("Kilometraje") })
-
-        Spacer(Modifier.height(20.dp))
-
-        Button(
-            onClick = {
-                val r = vm.actualizarPerfil(
-                    nombre,
-                    correo,
-                    clave,
-                    km.toIntOrNull() ?: 0
-                )
-
-                Toast.makeText(ctx, r, Toast.LENGTH_SHORT).show()
-            }
-        ) {
-            Text("Guardar")
+    val launcherPerfil = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        uri?.let {
+            vm.actualizarFotoPerfil(it.toString())
         }
+    }
 
-        Spacer(Modifier.height(10.dp))
+    Scaffold(
+        topBar = {
+            CenterAlignedTopAppBar(
+                title = {
+                    Text(
+                        text = "MI CUENTA",
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                },
+                navigationIcon = {
+                    IconButton(
+                        onClick = { nav.popBackStack() }
+                    ) {
+                        Icon(
+                            Icons.Default.ArrowBackIosNew,
+                            contentDescription = null
+                        )
+                    }
+                }
+            )
+        }
+    ) { pad ->
 
-        Button(
-            onClick = {
-                vm.cerrarSesion()
-                nav.navigate("login") {
-                    popUpTo(0)
+        Column(
+            modifier = Modifier
+                .padding(pad)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+
+            Box(
+                contentAlignment = Alignment.BottomEnd
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .size(130.dp)
+                        .clickable {
+                            launcherPerfil.launch(
+                                PickVisualMediaRequest(
+                                    ActivityResultContracts.PickVisualMedia.ImageOnly
+                                )
+                            )
+                        },
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shadowElevation = 4.dp
+                ) {
+                    if (u.fotoPerfilUri != null) {
+                        AsyncImage(
+                            model = u.fotoPerfilUri,
+                            contentDescription = "Foto de perfil",
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(CircleShape),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Box(
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = u.nombre.take(1).uppercase(),
+                                fontSize = 48.sp,
+                                fontWeight = FontWeight.Black,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+
+                Surface(
+                    modifier = Modifier.size(38.dp),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primary,
+                    shadowElevation = 2.dp
+                ) {
+                    Icon(
+                        Icons.Default.CameraAlt,
+                        contentDescription = null,
+                        modifier = Modifier.padding(8.dp),
+                        tint = Color.White
+                    )
                 }
             }
-        ) {
-            Text("Cerrar sesión")
+
+            Spacer(Modifier.height(28.dp))
+
+            Text(
+                text = "Información personal",
+                modifier = Modifier.fillMaxWidth(),
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+
+            Spacer(Modifier.height(14.dp))
+
+            OutlinedTextField(
+                value = nombre,
+                onValueChange = { nombre = it },
+                label = { Text("Nombre completo") },
+                leadingIcon = {
+                    Icon(
+                        Icons.Default.Person,
+                        contentDescription = null
+                    )
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp)
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = correo,
+                onValueChange = { correo = it },
+                label = { Text("Correo electrónico") },
+                leadingIcon = {
+                    Icon(
+                        Icons.Default.Email,
+                        contentDescription = null
+                    )
+                },
+                isError = correo.isNotEmpty() &&
+                        (!correo.contains("@") || !correo.contains(".")),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp)
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = clave,
+                onValueChange = { clave = it },
+                label = { Text("Contraseña") },
+                leadingIcon = {
+                    Icon(
+                        Icons.Default.Lock,
+                        contentDescription = null
+                    )
+                },
+                visualTransformation =
+                    if (claveVisible) VisualTransformation.None
+                    else PasswordVisualTransformation(),
+                trailingIcon = {
+                    IconButton(
+                        onClick = { claveVisible = !claveVisible }
+                    ) {
+                        Icon(
+                            if (claveVisible) Icons.Default.VisibilityOff
+                            else Icons.Default.Visibility,
+                            contentDescription = null
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp)
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = km,
+                onValueChange = { km = it },
+                label = { Text("Kilometraje actual") },
+                leadingIcon = {
+                    Icon(
+                        Icons.Default.Speed,
+                        contentDescription = null
+                    )
+                },
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Number
+                ),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp)
+            )
+
+            Spacer(Modifier.height(28.dp))
+
+            Button(
+                onClick = {
+                    val kmNum = km.toIntOrNull() ?: 0
+
+                    val r = vm.actualizarPerfil(
+                        nombre = nombre,
+                        correo = correo,
+                        clave = clave,
+                        km = kmNum
+                    )
+
+                    if (r == "OK") {
+                        Toast.makeText(
+                            ctx,
+                            "Perfil actualizado con éxito",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    } else {
+                        Toast.makeText(
+                            ctx,
+                            r,
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Icon(
+                    Icons.Default.Save,
+                    contentDescription = null
+                )
+
+                Spacer(Modifier.width(8.dp))
+
+                Text(
+                    text = "GUARDAR CAMBIOS",
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            TextButton(
+                onClick = {
+                    vm.cerrarSesion()
+
+                    nav.navigate("login") {
+                        popUpTo(0)
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                )
+            ) {
+                Icon(
+                    Icons.Default.Logout,
+                    contentDescription = null
+                )
+
+                Spacer(Modifier.width(8.dp))
+
+                Text("CERRAR SESIÓN")
+            }
         }
     }
 }
