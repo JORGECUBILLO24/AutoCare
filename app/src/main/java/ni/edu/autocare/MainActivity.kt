@@ -1,7 +1,10 @@
 package ni.edu.autocare
 
+import android.content.Context
+import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Bundle
+import android.util.Patterns
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -9,7 +12,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -29,12 +31,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.*
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.*
 import androidx.navigation.navArgument
@@ -42,8 +45,16 @@ import coil.compose.AsyncImage
 import ni.edu.autocare.ui.theme.AutoCareTheme
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.roundToInt
+import androidx.navigation.NavHostController
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 
-// --- 1. MODELOS DE DATOS ---
+// =======================================================
+// MODELOS
+// =======================================================
 
 data class Usuario(
     val id: String = UUID.randomUUID().toString(),
@@ -61,99 +72,317 @@ data class ServicioMantenimiento(
     val tipo: String,
     val fecha: Long,
     val costo: Double,
+    val observaciones: String = "",
+    val kilometraje: Int = 0,
     val fotoReciboUri: String? = null
 )
 
-// --- 2. VIEWMODEL (Lógica completa) ---
+// =======================================================
+// STORAGE SIMPLE
+// =======================================================
 
-class AutoCareViewModel : ViewModel() {
-    var estaEnModoOscuro by mutableStateOf(false)
-    var usuarioLogeado by mutableStateOf<Usuario?>(null)
+class AppStorage(context: Context) {
+    private val prefs: SharedPreferences =
+        context.getSharedPreferences("autocare_db", Context.MODE_PRIVATE)
 
-    val listaUsuarios = mutableStateListOf<Usuario>()
-    val listaServiciosGlobal = mutableStateListOf<ServicioMantenimiento>()
-
-    val serviciosDelUsuarioActual: List<ServicioMantenimiento>
-        get() = listaServiciosGlobal.filter { it.idUsuario == usuarioLogeado?.id }.sortedByDescending { it.fecha }
-
-    fun cambiarTema() { estaEnModoOscuro = !estaEnModoOscuro }
-
-    fun registrarUsuario(nombre: String, correo: String, clave: String): Boolean {
-        if (listaUsuarios.any { it.correo == correo }) return false
-        listaUsuarios.add(Usuario(nombre = nombre, correo = correo, clave = clave))
-        return true
+    fun guardarUsuarios(lista: List<Usuario>) {
+        prefs.edit().putString("usuarios", encodeUsuarios(lista)).apply()
     }
 
-    fun iniciarSesion(correo: String, clave: String): Boolean {
-        val usuario = listaUsuarios.find { it.correo == correo && it.clave == clave }
-        usuarioLogeado = usuario
-        return usuario != null
+    fun cargarUsuarios(): MutableList<Usuario> {
+        val raw = prefs.getString("usuarios", "") ?: ""
+        return decodeUsuarios(raw).toMutableList()
     }
 
-    fun actualizarPerfil(nuevoNombre: String, nuevoCorreo: String, nuevaClave: String): Boolean {
-        usuarioLogeado?.let { user ->
-            if (nuevoCorreo != user.correo && listaUsuarios.any { it.correo == nuevoCorreo }) return false
-            user.nombre = nuevoNombre
-            user.correo = nuevoCorreo
-            user.clave = nuevaClave
-            usuarioLogeado = user.copy()
-            return true
-        }
-        return false
+    fun guardarServicios(lista: List<ServicioMantenimiento>) {
+        prefs.edit().putString("servicios", encodeServicios(lista)).apply()
     }
 
-    // LÓGICA PARA CREAR O EDITAR UN SERVICIO
-    fun guardarServicio(idServicio: String?, tipo: String, fecha: Long, costo: Double, uri: String?) {
-        usuarioLogeado?.let { user ->
-            if (idServicio != null) {
-                // Editar existente
-                val index = listaServiciosGlobal.indexOfFirst { it.id == idServicio }
-                if (index != -1) {
-                    listaServiciosGlobal[index] = listaServiciosGlobal[index].copy(
-                        tipo = tipo, fecha = fecha, costo = costo, fotoReciboUri = uri
-                    )
-                }
-            } else {
-                // Crear nuevo
-                listaServiciosGlobal.add(0, ServicioMantenimiento(
-                    idUsuario = user.id, tipo = tipo, fecha = fecha, costo = costo, fotoReciboUri = uri
-                ))
-            }
+    fun cargarServicios(): MutableList<ServicioMantenimiento> {
+        val raw = prefs.getString("servicios", "") ?: ""
+        return decodeServicios(raw).toMutableList()
+    }
+
+    private fun encodeUsuarios(lista: List<Usuario>): String {
+        return lista.joinToString("|||") {
+            listOf(
+                it.id,
+                it.nombre,
+                it.correo,
+                it.clave,
+                it.fotoPerfilUri ?: "",
+                it.fotoAutoUri ?: "",
+                it.kilometrajeAuto.toString()
+            ).joinToString(";;")
         }
     }
 
-    // LÓGICA PARA ELIMINAR
-    fun eliminarServicio(idServicio: String) {
-        listaServiciosGlobal.removeAll { it.id == idServicio }
+    private fun decodeUsuarios(raw: String): List<Usuario> {
+        if (raw.isBlank()) return emptyList()
+        return raw.split("|||").mapNotNull {
+            val p = it.split(";;")
+            try {
+                Usuario(
+                    id = p[0],
+                    nombre = p[1],
+                    correo = p[2],
+                    clave = p[3],
+                    fotoPerfilUri = p[4].ifBlank { null },
+                    fotoAutoUri = p[5].ifBlank { null },
+                    kilometrajeAuto = p[6].toInt()
+                )
+            } catch (e: Exception) { null }
+        }
     }
 
-    fun actualizarFotoPerfil(uri: String) { usuarioLogeado = usuarioLogeado?.copy(fotoPerfilUri = uri) }
-    fun actualizarFotoAuto(uri: String) { usuarioLogeado = usuarioLogeado?.copy(fotoAutoUri = uri) }
+    private fun encodeServicios(lista: List<ServicioMantenimiento>): String {
+        return lista.joinToString("|||") {
+            listOf(
+                it.id,
+                it.idUsuario,
+                it.tipo,
+                it.fecha.toString(),
+                it.costo.toString(),
+                it.observaciones,
+                it.kilometraje.toString(),
+                it.fotoReciboUri ?: ""
+            ).joinToString(";;")
+        }
+    }
+
+    private fun decodeServicios(raw: String): List<ServicioMantenimiento> {
+        if (raw.isBlank()) return emptyList()
+        return raw.split("|||").mapNotNull {
+            val p = it.split(";;")
+            try {
+                ServicioMantenimiento(
+                    id = p[0],
+                    idUsuario = p[1],
+                    tipo = p[2],
+                    fecha = p[3].toLong(),
+                    costo = p[4].toDouble(),
+                    observaciones = p[5],
+                    kilometraje = p[6].toInt(),
+                    fotoReciboUri = p[7].ifBlank { null }
+                )
+            } catch (e: Exception) { null }
+        }
+    }
 }
 
-// --- 3. COMPONENTE PRINCIPAL ---
+// =======================================================
+// VIEWMODEL
+// =======================================================
+
+class AutoCareViewModel : ViewModel() {
+
+    var darkMode by mutableStateOf(false)
+    var usuarioActual by mutableStateOf<Usuario?>(null)
+
+    val usuarios = mutableStateListOf<Usuario>()
+    val servicios = mutableStateListOf<ServicioMantenimiento>()
+
+    lateinit var storage: AppStorage
+
+    fun iniciarStorage(context: Context) {
+        storage = AppStorage(context)
+
+        if (usuarios.isEmpty()) usuarios.addAll(storage.cargarUsuarios())
+        if (servicios.isEmpty()) servicios.addAll(storage.cargarServicios())
+    }
+
+    private fun guardarTodo() {
+        storage.guardarUsuarios(usuarios)
+        storage.guardarServicios(servicios)
+    }
+
+    fun registrar(nombre: String, correo: String, clave: String): String {
+        if (!Patterns.EMAIL_ADDRESS.matcher(correo).matches())
+            return "Correo inválido"
+
+        if (usuarios.any { it.correo == correo })
+            return "Correo ya registrado"
+
+        if (clave.length < 6)
+            return "Contraseña débil"
+
+        usuarios.add(
+            Usuario(
+                nombre = nombre,
+                correo = correo,
+                clave = clave
+            )
+        )
+
+        guardarTodo()
+        return "OK"
+    }
+
+    fun login(correo: String, clave: String): Boolean {
+        val user = usuarios.find {
+            it.correo == correo && it.clave == clave
+        }
+        usuarioActual = user
+        return user != null
+    }
+
+    fun cerrarSesion() {
+        usuarioActual = null
+    }
+
+    val serviciosUsuario: List<ServicioMantenimiento>
+        get() = servicios
+            .filter { it.idUsuario == usuarioActual?.id }
+            .sortedByDescending { it.fecha }
+
+    fun guardarServicio(
+        id: String?,
+        tipo: String,
+        fecha: Long,
+        costo: Double,
+        obs: String,
+        km: Int,
+        foto: String?
+    ) {
+        val user = usuarioActual ?: return
+        if (costo < 0) return
+
+        if (id == null) {
+            servicios.add(
+                0,
+                ServicioMantenimiento(
+                    idUsuario = user.id,
+                    tipo = tipo,
+                    fecha = fecha,
+                    costo = costo,
+                    observaciones = obs,
+                    kilometraje = km,
+                    fotoReciboUri = foto
+                )
+            )
+        } else {
+            val index = servicios.indexOfFirst { it.id == id }
+            if (index != -1) {
+                servicios[index] = servicios[index].copy(
+                    tipo = tipo,
+                    fecha = fecha,
+                    costo = costo,
+                    observaciones = obs,
+                    kilometraje = km,
+                    fotoReciboUri = foto
+                )
+            }
+        }
+
+        usuarioActual = usuarioActual?.copy(kilometrajeAuto = km)
+        guardarTodo()
+    }
+
+    fun eliminarServicio(id: String) {
+        servicios.removeAll { it.id == id }
+        guardarTodo()
+    }
+
+    fun actualizarPerfil(nombre: String, correo: String, clave: String, km: Int): String {
+        val u = usuarioActual ?: return "Error"
+
+        if (!Patterns.EMAIL_ADDRESS.matcher(correo).matches())
+            return "Correo inválido"
+
+        if (usuarios.any { it.correo == correo && it.id != u.id })
+            return "Correo ya usado"
+
+        u.nombre = nombre
+        u.correo = correo
+        u.clave = clave
+        u.kilometrajeAuto = km
+
+        usuarioActual = u.copy()
+        guardarTodo()
+        return "OK"
+    }
+
+    fun totalGastado(): Double = serviciosUsuario.sumOf { it.costo }
+
+    fun promedio(): Double =
+        if (serviciosUsuario.isEmpty()) 0.0
+        else totalGastado() / serviciosUsuario.size
+
+    fun totalMesActual(): Double {
+        val cal = Calendar.getInstance()
+        val mes = cal.get(Calendar.MONTH)
+        val year = cal.get(Calendar.YEAR)
+
+        return serviciosUsuario.filter {
+            val c = Calendar.getInstance()
+            c.timeInMillis = it.fecha
+            c.get(Calendar.MONTH) == mes &&
+                    c.get(Calendar.YEAR) == year
+        }.sumOf { it.costo }
+    }
+}
+
+// =======================================================
+// MAIN
+// =======================================================
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
         setContent {
             val vm: AutoCareViewModel = viewModel()
-            AutoCareTheme(darkTheme = vm.estaEnModoOscuro) {
-                val navController = rememberNavController()
-                NavHost(navController = navController, startDestination = "login") {
-                    composable("login") { VistaLogin(navController, vm) }
-                    composable("registro") { VistaRegistro(navController, vm) }
-                    composable("inicio") { VistaInicio(navController, vm) }
-                    composable("perfil") { VistaPerfil(navController, vm) }
+            val context = LocalContext.current
 
-                    // RUTA DINÁMICA PARA EL FORMULARIO (NUEVO O EDITAR)
+            LaunchedEffect(Unit) {
+                vm.iniciarStorage(context)
+            }
+
+            AutoCareTheme(darkTheme = vm.darkMode) {
+                val nav = rememberNavController()
+
+                NavHost(navController = nav, startDestination = "login") {
+
+                    composable("login") {
+                        PantallaLogin(nav, vm)
+                    }
+
+                    composable("registro") {
+                        PantallaRegistro(nav, vm)
+                    }
+
+                    composable("inicio") {
+                        PantallaInicio(nav, vm)
+                    }
+
+                    composable("perfil") {
+                        PantallaPerfil(nav, vm)
+                    }
+
                     composable(
-                        route = "formulario_servicio?servicioId={servicioId}",
-                        arguments = listOf(navArgument("servicioId") { type = NavType.StringType; nullable = true })
-                    ) { backStackEntry ->
-                        val id = backStackEntry.arguments?.getString("servicioId")
-                        VistaFormularioServicio(navController, vm, id)
+                        "form?id={id}",
+                        arguments = listOf(
+                            navArgument("id") {
+                                nullable = true
+                                type = NavType.StringType
+                            }
+                        )
+                    ) {
+                        PantallaFormulario(nav, vm,
+                            it.arguments?.getString("id"))
+                    }
+
+                    composable(
+                        "detalle/{id}",
+                        arguments = listOf(
+                            navArgument("id") {
+                                type = NavType.StringType
+                            }
+                        )
+                    ) {
+                        PantallaDetalle(nav, vm,
+                            it.arguments?.getString("id") ?: "")
                     }
                 }
             }
@@ -161,159 +390,267 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// --- 4. VISTAS DE AUTENTICACIÓN (LOGIN Y REGISTRO) ---
+// =======================================================
+// LOGIN
+// =======================================================
+
 @Composable
-fun VistaLogin(navController: NavHostController, vm: AutoCareViewModel) {
+fun PantallaLogin(nav: NavHostController, vm: AutoCareViewModel) {
+
     var correo by remember { mutableStateOf("") }
     var clave by remember { mutableStateOf("") }
-    var claveVisible by remember { mutableStateOf(false) }
-    val contexto = LocalContext.current
+    var visible by remember { mutableStateOf(false) }
+    val ctx = LocalContext.current
 
-    Column(modifier = Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-        Surface(Modifier.size(80.dp), CircleShape, MaterialTheme.colorScheme.primaryContainer) {
-            Icon(Icons.Default.AutoMode, null, modifier = Modifier.padding(16.dp), tint = MaterialTheme.colorScheme.primary)
-        }
-        Text("AutoCare", fontSize = 32.sp, fontWeight = FontWeight.Black)
-        Spacer(Modifier.height(40.dp))
+    Column(
+        Modifier.fillMaxSize().padding(30.dp),
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text("AutoCare", fontSize = 34.sp, fontWeight = FontWeight.Black)
+
+        Spacer(Modifier.height(30.dp))
 
         OutlinedTextField(
-            value = correo, onValueChange = { correo = it },
-            label = { Text("Email") }, modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp), leadingIcon = { Icon(Icons.Default.Email, null) },
-            isError = correo.isNotEmpty() && !correo.contains("@")
+            value = correo,
+            onValueChange = { correo = it },
+            label = { Text("Correo") },
+            modifier = Modifier.fillMaxWidth()
         )
+
         Spacer(Modifier.height(12.dp))
+
         OutlinedTextField(
-            value = clave, onValueChange = { clave = it },
-            label = { Text("Contraseña") }, modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp), leadingIcon = { Icon(Icons.Default.Lock, null) },
-            visualTransformation = if (claveVisible) VisualTransformation.None else PasswordVisualTransformation(),
+            value = clave,
+            onValueChange = { clave = it },
+            label = { Text("Contraseña") },
+            modifier = Modifier.fillMaxWidth(),
+            visualTransformation =
+                if (visible) VisualTransformation.None
+                else PasswordVisualTransformation(),
             trailingIcon = {
-                IconButton(onClick = { claveVisible = !claveVisible }) {
-                    Icon(if (claveVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility, null)
+                IconButton(onClick = { visible = !visible }) {
+                    Icon(Icons.Default.Visibility, null)
                 }
             }
         )
 
-        Spacer(Modifier.height(30.dp))
-        Button(onClick = {
-            if (vm.iniciarSesion(correo, clave)) navController.navigate("inicio") { popUpTo("login") { inclusive = true } }
-            else Toast.makeText(contexto, "Credenciales incorrectas", Toast.LENGTH_SHORT).show()
-        }, modifier = Modifier.fillMaxWidth().height(56.dp), shape = RoundedCornerShape(16.dp)) {
-            Text("ENTRAR", fontWeight = FontWeight.Bold)
-        }
-        TextButton(onClick = { navController.navigate("registro") }) { Text("Crear cuenta nueva") }
-    }
-}
+        Spacer(Modifier.height(25.dp))
 
-@Composable
-fun VistaRegistro(navController: NavHostController, vm: AutoCareViewModel) {
-    var nombre by remember { mutableStateOf("") }; var correo by remember { mutableStateOf("") }
-    var clave by remember { mutableStateOf("") }; var claveVisible by remember { mutableStateOf(false) }
-    val contexto = LocalContext.current
-
-    Column(modifier = Modifier.fillMaxSize().padding(32.dp)) {
-        IconButton(onClick = { navController.popBackStack() }) { Icon(Icons.Default.ArrowBackIosNew, null) }
-        Text("Registro", fontSize = 32.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(20.dp))
-        OutlinedTextField(value = nombre, onValueChange = { nombre = it }, label = { Text("Nombre Completo") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
-        Spacer(Modifier.height(12.dp))
-        OutlinedTextField(value = correo, onValueChange = { correo = it }, label = { Text("Correo") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), isError = correo.isNotEmpty() && !correo.contains("@"))
-        Spacer(Modifier.height(12.dp))
-        OutlinedTextField(
-            value = clave, onValueChange = { clave = it }, label = { Text("Contraseña") },
-            modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
-            visualTransformation = if (claveVisible) VisualTransformation.None else PasswordVisualTransformation(),
-            trailingIcon = { IconButton(onClick = { claveVisible = !claveVisible }) { Icon(if (claveVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility, null) } }
-        )
-        Spacer(Modifier.height(30.dp))
         Button(
             onClick = {
-                if (vm.registrarUsuario(nombre, correo, clave)) {
-                    Toast.makeText(contexto, "¡Registrado!", Toast.LENGTH_SHORT).show()
-                    navController.popBackStack()
+                if (vm.login(correo, clave)) {
+                    nav.navigate("inicio") {
+                        popUpTo("login") { inclusive = true }
+                    }
+                } else {
+                    Toast.makeText(
+                        ctx,
+                        "Credenciales incorrectas",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 }
             },
-            enabled = nombre.isNotEmpty() && correo.contains("@") && clave.length >= 6,
-            modifier = Modifier.fillMaxWidth().height(56.dp), shape = RoundedCornerShape(16.dp)
-        ) { Text("REGISTRARME") }
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Entrar")
+        }
+
+        TextButton(
+            onClick = { nav.navigate("registro") }
+        ) {
+            Text("Crear cuenta")
+        }
     }
 }
 
-// --- 5. VISTA INICIO (HOME) CON BOTONES DE EDITAR Y ELIMINAR ---
-@OptIn(ExperimentalMaterial3Api::class)
+// =======================================================
+// REGISTRO
+// =======================================================
+
 @Composable
-fun VistaInicio(navController: NavHostController, vm: AutoCareViewModel) {
-    val usuario = vm.usuarioLogeado ?: return
-    val launcherFotoAuto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        uri?.let { vm.actualizarFotoAuto(it.toString()) }
+fun PantallaRegistro(nav: NavHostController, vm: AutoCareViewModel) {
+
+    var nombre by remember { mutableStateOf("") }
+    var correo by remember { mutableStateOf("") }
+    var clave by remember { mutableStateOf("") }
+
+    val ctx = LocalContext.current
+
+    Column(
+        Modifier.fillMaxSize().padding(25.dp)
+    ) {
+        Text("Registro", fontSize = 30.sp)
+
+        Spacer(Modifier.height(20.dp))
+
+        OutlinedTextField(nombre, { nombre = it }, label = { Text("Nombre") })
+        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(correo, { correo = it }, label = { Text("Correo") })
+        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(clave, { clave = it }, label = { Text("Clave") })
+
+        Spacer(Modifier.height(25.dp))
+
+        Button(
+            onClick = {
+                val r = vm.registrar(nombre, correo, clave)
+
+                if (r == "OK") {
+                    Toast.makeText(ctx, "Registrado", Toast.LENGTH_SHORT).show()
+                    nav.popBackStack()
+                } else {
+                    Toast.makeText(ctx, r, Toast.LENGTH_SHORT).show()
+                }
+            }
+        ) {
+            Text("Registrar")
+        }
+    }
+}
+
+// =======================================================
+// INICIO
+// =======================================================
+
+@Composable
+fun PantallaInicio(nav: NavHostController, vm: AutoCareViewModel) {
+
+    val user = vm.usuarioActual ?: return
+    var buscar by remember { mutableStateOf("") }
+    var confirmarEliminar by remember { mutableStateOf<String?>(null) }
+
+    val lista = vm.serviciosUsuario.filter {
+        it.tipo.contains(buscar, true)
+    }
+
+    if (confirmarEliminar != null) {
+        AlertDialog(
+            onDismissRequest = { confirmarEliminar = null },
+            title = { Text("Eliminar") },
+            text = { Text("¿Seguro de eliminar este servicio?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.eliminarServicio(confirmarEliminar!!)
+                    confirmarEliminar = null
+                }) { Text("Sí") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    confirmarEliminar = null
+                }) { Text("No") }
+            }
+        )
     }
 
     Scaffold(
-        topBar = {
-            CenterAlignedTopAppBar(title = { Text("MI GARAJE", fontWeight = FontWeight.Black) },
-                actions = { IconButton(onClick = { vm.cambiarTema() }) { Icon(if (vm.estaEnModoOscuro) Icons.Default.LightMode else Icons.Default.DarkMode, null) } })
-        },
-        bottomBar = {
-            NavigationBar {
-                NavigationBarItem(selected = true, onClick = {}, icon = { Icon(Icons.Default.Home, null) }, label = { Text("Inicio") })
-                NavigationBarItem(selected = false, onClick = { navController.navigate("perfil") }, icon = { Icon(Icons.Default.Person, null) }, label = { Text("Perfil") })
-            }
-        },
         floatingActionButton = {
-            FloatingActionButton(onClick = { navController.navigate("formulario_servicio") }, containerColor = MaterialTheme.colorScheme.primary) {
-                Icon(Icons.Default.Add, null, tint = Color.White)
+            FloatingActionButton(
+                onClick = { nav.navigate("form") }
+            ) {
+                Icon(Icons.Default.Add, null)
             }
         }
-    ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize().padding(16.dp)) {
-            Card(modifier = Modifier.fillMaxWidth().height(200.dp).clickable {
-                launcherFotoAuto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-            }, shape = RoundedCornerShape(24.dp), elevation = CardDefaults.cardElevation(8.dp)) {
-                Box {
-                    if (usuario.fotoAutoUri != null) {
-                        AsyncImage(model = usuario.fotoAutoUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                    } else {
-                        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.primaryContainer), contentAlignment = Alignment.Center) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(Icons.Default.DirectionsCar, null, modifier = Modifier.size(48.dp))
-                                Text("Toca para subir foto de tu auto")
-                            }
-                        }
-                    }
-                    Column(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(0.7f)))).padding(16.dp), verticalArrangement = Arrangement.Bottom) {
-                        Text("Mantenimiento de", color = Color.White.copy(0.8f), fontSize = 12.sp)
-                        Text(usuario.nombre, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Black)
-                    }
+    ) { pad ->
+
+        Column(
+            Modifier.padding(pad).padding(16.dp)
+        ) {
+
+            Text(
+                "Hola ${user.nombre}",
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            Text("Kilometraje: ${user.kilometrajeAuto} km")
+
+            Spacer(Modifier.height(10.dp))
+
+            Card(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Resumen")
+                    Text("Total: $${vm.totalGastado()}")
+                    Text("Mes: $${vm.totalMesActual()}")
+                    Text("Promedio: $${vm.promedio().roundToInt()}")
                 }
             }
 
-            Spacer(Modifier.height(24.dp))
-            Text("Historial de Servicios", fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
+            Spacer(Modifier.height(12.dp))
 
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 10.dp)) {
-                items(vm.serviciosDelUsuarioActual) { servicio ->
-                    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
-                        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Surface(Modifier.size(48.dp), RoundedCornerShape(12.dp), MaterialTheme.colorScheme.secondaryContainer) {
-                                if (servicio.fotoReciboUri != null) {
-                                    AsyncImage(model = servicio.fotoReciboUri, contentDescription = null, contentScale = ContentScale.Crop)
-                                } else {
-                                    Icon(Icons.Default.Receipt, null, modifier = Modifier.padding(12.dp))
-                                }
+            OutlinedTextField(
+                value = buscar,
+                onValueChange = { buscar = it },
+                label = { Text("Buscar servicio") },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            Row {
+                Button(onClick = {
+                    nav.navigate("perfil")
+                }) {
+                    Text("Perfil")
+                }
+
+                Spacer(Modifier.width(10.dp))
+
+                Button(onClick = {
+                    vm.darkMode = !vm.darkMode
+                }) {
+                    Text("Tema")
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            LazyColumn {
+                items(lista) { item ->
+
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 6.dp)
+                            .clickable {
+                                nav.navigate("detalle/${item.id}")
                             }
-                            Spacer(Modifier.width(16.dp))
+                    ) {
+                        Row(
+                            Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+
                             Column(Modifier.weight(1f)) {
-                                Text(servicio.tipo, fontWeight = FontWeight.Bold)
-                                Text(SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(servicio.fecha)), fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
-                                Text("$${servicio.costo}", fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.primary)
+                                Text(item.tipo, fontWeight = FontWeight.Bold)
+                                Text(
+                                    SimpleDateFormat(
+                                        "dd/MM/yyyy",
+                                        Locale.getDefault()
+                                    ).format(Date(item.fecha))
+                                )
+                                Text("$${item.costo}")
                             }
-                            // BOTONES DE EDICIÓN Y ELIMINACIÓN
-                            IconButton(onClick = { navController.navigate("formulario_servicio?servicioId=${servicio.id}") }) {
-                                Icon(Icons.Default.Edit, contentDescription = "Editar", tint = MaterialTheme.colorScheme.primary)
+
+                            IconButton(
+                                onClick = {
+                                    nav.navigate("form?id=${item.id}")
+                                }
+                            ) {
+                                Icon(Icons.Default.Edit, null)
                             }
-                            IconButton(onClick = { vm.eliminarServicio(servicio.id) }) {
-                                Icon(Icons.Default.Delete, contentDescription = "Eliminar", tint = MaterialTheme.colorScheme.error)
+
+                            IconButton(
+                                onClick = {
+                                    confirmarEliminar = item.id
+                                }
+                            ) {
+                                Icon(
+                                    Icons.Default.Delete,
+                                    null,
+                                    tint = Color.Red
+                                )
                             }
                         }
                     }
@@ -323,147 +660,310 @@ fun VistaInicio(navController: NavHostController, vm: AutoCareViewModel) {
     }
 }
 
-// --- 6. VISTA FORMULARIO (SIRVE PARA CREAR Y EDITAR) ---
+// =======================================================
+// FORMULARIO
+// =======================================================
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun VistaFormularioServicio(navController: NavHostController, vm: AutoCareViewModel, servicioId: String?) {
-    // Buscar servicio si existe
-    val servicioAEditar = remember(servicioId) { vm.serviciosDelUsuarioActual.find { it.id == servicioId } }
-    val esEdicion = servicioAEditar != null
+fun PantallaFormulario(
+    nav: NavHostController,
+    vm: AutoCareViewModel,
+    id: String?
+) {
 
-    var tipo by remember { mutableStateOf(servicioAEditar?.tipo ?: "") }
-    var costo by remember { mutableStateOf(servicioAEditar?.costo?.toString() ?: "") }
-    var fotoUri by remember { mutableStateOf<Uri?>(servicioAEditar?.fotoReciboUri?.let { Uri.parse(it) }) }
+    val editar = vm.serviciosUsuario.find { it.id == id }
 
-    val datePickerState = rememberDatePickerState(initialSelectedDateMillis = servicioAEditar?.fecha ?: System.currentTimeMillis())
-    var showPicker by remember { mutableStateOf(false) }
-    val launcherFoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> if (uri != null) fotoUri = uri }
-
-    if (showPicker) {
-        DatePickerDialog(onDismissRequest = { showPicker = false }, confirmButton = { TextButton(onClick = { showPicker = false }) { Text("OK") } }) {
-            DatePicker(state = datePickerState)
-        }
+    var tipo by remember {
+        mutableStateOf(editar?.tipo ?: "Cambio de aceite")
     }
 
-    Scaffold(topBar = {
-        TopAppBar(
-            title = { Text(if (esEdicion) "Editar Gasto" else "Registrar Gasto") },
-            navigationIcon = { IconButton(onClick = { navController.popBackStack() }) { Icon(Icons.Default.ArrowBack, null) } }
+    var costo by remember {
+        mutableStateOf(editar?.costo?.toString() ?: "")
+    }
+
+    var obs by remember {
+        mutableStateOf(editar?.observaciones ?: "")
+    }
+
+    var km by remember {
+        mutableStateOf(
+            editar?.kilometraje?.toString()
+                ?: vm.usuarioActual?.kilometrajeAuto.toString()
         )
-    }) { padding ->
-        Column(modifier = Modifier.padding(padding).padding(20.dp).verticalScroll(rememberScrollState())) {
-            OutlinedTextField(value = tipo, onValueChange = { tipo = it }, label = { Text("¿Qué servicio se realizó?") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
-            Spacer(Modifier.height(12.dp))
+    }
+
+    var foto by remember {
+        mutableStateOf<Uri?>(
+            editar?.fotoReciboUri?.let { Uri.parse(it) }
+        )
+    }
+
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) {
+        if (it != null) foto = it
+    }
+
+    val categorias = listOf(
+        "Cambio de aceite",
+        "Llantas",
+        "Frenos",
+        "Batería",
+        "Lavado",
+        "Revisión general"
+    )
+
+    var expanded by remember { mutableStateOf(false) }
+
+    Column(
+        Modifier.fillMaxSize()
+            .padding(20.dp)
+            .verticalScroll(rememberScrollState())
+    ) {
+
+        Text(
+            if (editar == null) "Nuevo Servicio"
+            else "Editar Servicio",
+            fontSize = 28.sp
+        )
+
+        Spacer(Modifier.height(16.dp))
+
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { expanded = !expanded }
+        ) {
+
             OutlinedTextField(
-                value = datePickerState.selectedDateMillis?.let { SimpleDateFormat("dd/MM/yyyy").format(Date(it)) } ?: "Fecha del servicio",
-                onValueChange = {}, readOnly = true, modifier = Modifier.fillMaxWidth().clickable { showPicker = true }, enabled = false,
-                leadingIcon = { Icon(Icons.Default.CalendarMonth, null) },
-                colors = OutlinedTextFieldDefaults.colors(disabledTextColor = MaterialTheme.colorScheme.onSurface, disabledBorderColor = MaterialTheme.colorScheme.outline, disabledLeadingIconColor = MaterialTheme.colorScheme.primary)
+                value = tipo,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Categoría") },
+                modifier = Modifier.menuAnchor()
             )
-            Spacer(Modifier.height(12.dp))
-            OutlinedTextField(value = costo, onValueChange = { costo = it }, label = { Text("Costo Total ($)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
 
-            Spacer(Modifier.height(24.dp))
-            Text("Evidencia (Foto de recibo o auto)", fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(8.dp))
-            Box(modifier = Modifier.fillMaxWidth().height(180.dp).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceVariant).clickable {
-                launcherFoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-            }, contentAlignment = Alignment.Center) {
-                if (fotoUri != null) AsyncImage(model = fotoUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                else Column(horizontalAlignment = Alignment.CenterHorizontally) { Icon(Icons.Default.AddAPhoto, null); Text(if (esEdicion) "Cambiar Foto" else "Añadir Foto", fontSize = 12.sp) }
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false }
+            ) {
+                categorias.forEach {
+                    DropdownMenuItem(
+                        text = { Text(it) },
+                        onClick = {
+                            tipo = it
+                            expanded = false
+                        }
+                    )
+                }
             }
+        }
 
-            Spacer(Modifier.height(40.dp))
+        Spacer(Modifier.height(12.dp))
 
-            Button(onClick = {
-                val fechaSegura = datePickerState.selectedDateMillis ?: System.currentTimeMillis()
-                val costoSeguro = costo.toDoubleOrNull() ?: 0.0
-                val uriSegura = fotoUri?.toString()
+        OutlinedTextField(
+            costo,
+            { costo = it },
+            label = { Text("Costo") },
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Number
+            )
+        )
 
-                // Mando el ID si es edición, o null si es nuevo
-                vm.guardarServicio(servicioId, tipo, fechaSegura, costoSeguro, uriSegura)
-                navController.popBackStack()
-            }, enabled = tipo.isNotEmpty() && costo.isNotEmpty(), modifier = Modifier.fillMaxWidth().height(56.dp), shape = RoundedCornerShape(16.dp)) {
-                Text(if (esEdicion) "ACTUALIZAR CAMBIOS" else "GUARDAR REGISTRO", fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(12.dp))
+
+        OutlinedTextField(
+            km,
+            { km = it },
+            label = { Text("Kilometraje") }
+        )
+
+        Spacer(Modifier.height(12.dp))
+
+        OutlinedTextField(
+            obs,
+            { obs = it },
+            label = { Text("Observaciones") },
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(Modifier.height(12.dp))
+
+        Button(
+            onClick = {
+                launcher.launch(
+                    PickVisualMediaRequest(
+                        ActivityResultContracts
+                            .PickVisualMedia.ImageOnly
+                    )
+                )
             }
+        ) {
+            Text("Seleccionar Foto")
+        }
+
+        foto?.let {
+            Spacer(Modifier.height(10.dp))
+            AsyncImage(
+                model = it,
+                contentDescription = null,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(180.dp)
+            )
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        Button(
+            onClick = {
+                val costoNum = costo.toDoubleOrNull() ?: -1.0
+                val kmNum = km.toIntOrNull() ?: 0
+
+                if (costoNum < 0) return@Button
+
+                vm.guardarServicio(
+                    id,
+                    tipo,
+                    System.currentTimeMillis(),
+                    costoNum,
+                    obs,
+                    kmNum,
+                    foto?.toString()
+                )
+
+                nav.popBackStack()
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Guardar")
         }
     }
 }
 
-// --- 7. VISTA PERFIL ---
-@OptIn(ExperimentalMaterial3Api::class)
+// =======================================================
+// DETALLE
+// =======================================================
+
 @Composable
-fun VistaPerfil(navController: NavHostController, vm: AutoCareViewModel) {
-    val usuario = vm.usuarioLogeado ?: return
-    var nombreEdit by remember { mutableStateOf(usuario.nombre) }
-    var correoEdit by remember { mutableStateOf(usuario.correo) }
-    var claveEdit by remember { mutableStateOf(usuario.clave) }
-    var claveVisible by remember { mutableStateOf(false) }
+fun PantallaDetalle(
+    nav: NavHostController,
+    vm: AutoCareViewModel,
+    id: String
+) {
 
-    val launcherPerfil = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        uri?.let { vm.actualizarFotoPerfil(it.toString()) }
-    }
-    val contexto = LocalContext.current
+    val item = vm.serviciosUsuario.find { it.id == id } ?: return
 
-    Scaffold(topBar = {
-        CenterAlignedTopAppBar(title = { Text("MI CUENTA", fontWeight = FontWeight.ExtraBold) }, navigationIcon = { IconButton(onClick = { navController.popBackStack() }) { Icon(Icons.Default.ArrowBackIosNew, null) } })
-    }) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(
+        Modifier.fillMaxSize()
+            .padding(20.dp)
+            .verticalScroll(rememberScrollState())
+    ) {
 
-            Box(contentAlignment = Alignment.BottomEnd) {
-                Surface(modifier = Modifier.size(130.dp).clickable { launcherPerfil.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer, shadowElevation = 4.dp) {
-                    if (usuario.fotoPerfilUri != null) {
-                        AsyncImage(model = usuario.fotoPerfilUri, contentDescription = null, modifier = Modifier.fillMaxSize().clip(CircleShape), contentScale = ContentScale.Crop)
-                    } else {
-                        Box(contentAlignment = Alignment.Center) { Text(usuario.nombre.take(1).uppercase(), fontSize = 48.sp, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.primary) }
-                    }
-                }
-                Surface(Modifier.size(36.dp), CircleShape, MaterialTheme.colorScheme.primary, shadowElevation = 2.dp) {
-                    Icon(Icons.Default.CameraAlt, null, modifier = Modifier.padding(8.dp), tint = Color.White)
-                }
-            }
+        Text(item.tipo, fontSize = 30.sp)
 
-            Spacer(Modifier.height(32.dp))
-            Text("Información Personal", modifier = Modifier.fillMaxWidth(), fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.height(15.dp))
+
+        Text("Fecha:")
+        Text(
+            SimpleDateFormat(
+                "dd/MM/yyyy",
+                Locale.getDefault()
+            ).format(Date(item.fecha))
+        )
+
+        Spacer(Modifier.height(10.dp))
+
+        Text("Costo: $${item.costo}")
+        Text("Kilometraje: ${item.kilometraje} km")
+
+        Spacer(Modifier.height(10.dp))
+
+        Text("Observaciones:")
+        Text(item.observaciones)
+
+        item.fotoReciboUri?.let {
             Spacer(Modifier.height(16.dp))
-
-            OutlinedTextField(value = nombreEdit, onValueChange = { nombreEdit = it }, label = { Text("Nombre Completo") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), leadingIcon = { Icon(Icons.Default.Person, null) })
-            Spacer(Modifier.height(12.dp))
-            OutlinedTextField(value = correoEdit, onValueChange = { correoEdit = it }, label = { Text("Correo Electrónico") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), leadingIcon = { Icon(Icons.Default.Email, null) }, isError = correoEdit.isNotEmpty() && (!correoEdit.contains("@") || !correoEdit.contains(".")))
-            Spacer(Modifier.height(12.dp))
-            OutlinedTextField(
-                value = claveEdit, onValueChange = { claveEdit = it }, label = { Text("Contraseña") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), leadingIcon = { Icon(Icons.Default.Lock, null) },
-                visualTransformation = if (claveVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                trailingIcon = { IconButton(onClick = { claveVisible = !claveVisible }) { Icon(if (claveVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility, null) } }
+            AsyncImage(
+                model = it,
+                contentDescription = null,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(220.dp)
             )
+        }
 
-            Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.height(20.dp))
 
-            Button(
-                onClick = {
-                    if (correoEdit.contains("@") && nombreEdit.isNotEmpty() && claveEdit.length >= 6) {
-                        if (vm.actualizarPerfil(nombreEdit, correoEdit, claveEdit)) {
-                            Toast.makeText(contexto, "Perfil actualizado con éxito", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(contexto, "El correo ya está en uso", Toast.LENGTH_SHORT).show()
-                        }
-                    } else { Toast.makeText(contexto, "Revisa los campos en rojo", Toast.LENGTH_SHORT).show() }
-                },
-                modifier = Modifier.fillMaxWidth().height(56.dp), shape = RoundedCornerShape(16.dp), elevation = ButtonDefaults.buttonElevation(4.dp)
-            ) {
-                Icon(Icons.Default.Save, null); Spacer(Modifier.width(8.dp))
-                Text("GUARDAR CAMBIOS", fontWeight = FontWeight.Bold)
+        Button(
+            onClick = { nav.popBackStack() }
+        ) {
+            Text("Volver")
+        }
+    }
+}
+
+// =======================================================
+// PERFIL
+// =======================================================
+
+@Composable
+fun PantallaPerfil(
+    nav: NavHostController,
+    vm: AutoCareViewModel
+) {
+
+    val u = vm.usuarioActual ?: return
+    val ctx = LocalContext.current
+
+    var nombre by remember { mutableStateOf(u.nombre) }
+    var correo by remember { mutableStateOf(u.correo) }
+    var clave by remember { mutableStateOf(u.clave) }
+    var km by remember { mutableStateOf(u.kilometrajeAuto.toString()) }
+
+    Column(
+        Modifier.fillMaxSize().padding(20.dp)
+    ) {
+
+        Text("Perfil", fontSize = 30.sp)
+
+        Spacer(Modifier.height(20.dp))
+
+        OutlinedTextField(nombre, { nombre = it }, label = { Text("Nombre") })
+        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(correo, { correo = it }, label = { Text("Correo") })
+        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(clave, { clave = it }, label = { Text("Clave") })
+        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(km, { km = it }, label = { Text("Kilometraje") })
+
+        Spacer(Modifier.height(20.dp))
+
+        Button(
+            onClick = {
+                val r = vm.actualizarPerfil(
+                    nombre,
+                    correo,
+                    clave,
+                    km.toIntOrNull() ?: 0
+                )
+
+                Toast.makeText(ctx, r, Toast.LENGTH_SHORT).show()
             }
+        ) {
+            Text("Guardar")
+        }
 
-            Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(10.dp))
 
-            TextButton(
-                onClick = { navController.navigate("login") { popUpTo(0) } },
-                modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-            ) {
-                Icon(Icons.Default.Logout, null); Spacer(Modifier.width(8.dp))
-                Text("CERRAR SESIÓN")
+        Button(
+            onClick = {
+                vm.cerrarSesion()
+                nav.navigate("login") {
+                    popUpTo(0)
+                }
             }
+        ) {
+            Text("Cerrar sesión")
         }
     }
 }
